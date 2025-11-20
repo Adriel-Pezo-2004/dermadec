@@ -50,7 +50,7 @@ export default function DashboardPage() {
                   </svg>
                 </div>
                 <div>
-                  <h1 className="text-xl font-bold text-gray-900 font-display">MediCare</h1>
+                  <h1 className="text-xl font-bold text-gray-900 font-display">DermaDec</h1>
                   <p className="text-xs text-gray-600">Sistema Médico</p>
                 </div>
               </div>

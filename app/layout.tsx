@@ -15,7 +15,7 @@ const poppins = Poppins({
 })
 
 export const metadata: Metadata = {
-  title: "MediCare - Sistema de Diagnóstico Médico",
+  title: "DermaDec - Sistema de Diagnóstico Médico",
   description: "Plataforma profesional para gestión de pacientes y diagnósticos médicos",
     generator: 'v0.app'
 }

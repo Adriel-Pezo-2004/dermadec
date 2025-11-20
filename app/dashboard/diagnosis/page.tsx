@@ -1,10 +1,7 @@
 "use client"
 
-// --- [CAMBIO] ---
-// Se elimina la importación de 'tfjs'.
-// Se añade 'FileUp' (o 'Upload') para el icono del botón de carga.
-// --------------------
 import { useState, useRef, useEffect } from "react"
+import * as tf from "@tensorflow/tfjs"
 import { motion, AnimatePresence } from "framer-motion"
 import { useRouter } from "next/navigation"
 import { AuthGuard } from "@/components/auth-guard"
@@ -19,7 +16,7 @@ import {
   ImageIcon,
   Loader2,
   FileUp, // Icono para "subir"
-} from "lucide-react"
+} from "lucide-react" 
 
 interface CapturedImage {
   id: string
@@ -29,13 +26,8 @@ interface CapturedImage {
 
 export default function DiagnosisPage() {
   const router = useRouter()
-  // --- [CAMBIO] ---
-  // Se elimina 'videoRef'. 'canvasRef' no es necesario para la simulación.
-  // Se añade 'fileInputRef' para el input de tipo "file" oculto.
-  // --------------------
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const canvasRef = useRef<HTMLCanvasElement>(null) // Lo mantenemos por si lo usas para otra cosa, pero no es crítico aquí.
-
+  
   const [isCameraActive, setIsCameraActive] = useState(false) // Esto ya no es tan relevante
   const [capturedImages, setCapturedImages] = useState<CapturedImage[]>([])
   const [selectedPatient, setSelectedPatient] = useState("")
@@ -44,23 +36,28 @@ export default function DiagnosisPage() {
   const [patients, setPatients] = useState<any[]>([])
   const [saving, setSaving] = useState(false)
   
-  // --- [CAMBIO] ---
-  // Se elimina 'stream'.
-  // Se eliminan 'model' y 'loadingModel'.
-  // Se añade 'isSimulating' para mostrar un loader durante la IA falsa.
-  // --------------------
+  const [model, setModel] = useState<tf.LayersModel | null>(null)
+  const [loadingModel, setLoadingModel] = useState(true)
   const [prediction, setPrediction] = useState("")
-  const [isSimulating, setIsSimulating] = useState(false)
+  const [isPredicting, setIsPredicting] = useState(false)
+  const [probabilities, setProbabilities] = useState<number[]>([])
+
+  // Mapeo de las clases del modelo
+  const classLabels = ['Melanoma Maligno', 'Melanoma Benigno', 'No Melanoma'];
 
   useEffect(() => {
-    // --- [CAMBIO] ---
-    // Se elimina la función 'loadModel()' de IA.
-    // Se elimina la dependencia de 'stream'.
-    // --------------------
-    fetchPatients()
-    return () => {
-      // Lógica de limpieza si es necesaria (ninguna por ahora)
+    async function loadModel() {
+      try {
+        const loadedModel = await tf.loadLayersModel("/model/model.json")
+        setModel(loadedModel)
+        setLoadingModel(false)
+      } catch (error) {
+        console.error("Error loading model:", error)
+        setLoadingModel(false)
+      }
     }
+    loadModel()
+    fetchPatients()
   }, []) // Se ejecuta solo una vez al montar el componente
 
   const fetchPatients = async () => {
@@ -74,36 +71,52 @@ export default function DiagnosisPage() {
     }
   }
 
-  // --- [CAMBIO] ---
-  // Se eliminan 'startCamera' y 'stopCamera'.
-  // --------------------
+  const runPrediction = async (image: HTMLImageElement) => {
+    if (!model || !image) return;
 
-  // --- [CAMBIO] ---
-  // Nueva función para simular la predicción de IA.
-  // --------------------
-  const simulateDiagnosis = () => {
-    setIsSimulating(true)
+    setIsPredicting(true);
     setPrediction("Analizando imagen con IA...")
+    setProbabilities([]) // Limpiar probabilidades anteriores
 
-    // Simula un retraso de la red o del procesamiento (ej. 1.5 segundos)
-    setTimeout(() => {
-      // Genera un número aleatorio entre 88 y 95
-      const randomCertainty = Math.random() * (0.95 - 0.88) + 0.88 // 0.88 a 0.95
+    // Preprocesar la imagen
+    const tensor = tf.browser.fromPixels(image)
+      .resizeNearestNeighbor([224, 224]) // Redimensionar a 224x224
+      .toFloat()
+      .div(tf.scalar(127.5)) // Normalizar a [-1, 1]
+      .sub(tf.scalar(1.0))
+      .expandDims(); // Añadir dimensión de batch
 
-      const probabilityMelanoma = randomCertainty
-      const predictionText = `IA: Positivo (Confianza: ${(
-        probabilityMelanoma * 100
-      ).toFixed(2)}%)`
+    try {
+      // Realizar la predicción
+      const result = model.predict(tensor) as tf.Tensor;
+      const probabilitiesData = await result.data() as Float32Array;
+      
+      // Encontrar la clase con la mayor probabilidad
+      let maxProb = 0;
+      let maxIndex = -1;
+      probabilitiesData.forEach((prob, i) => {
+        if (prob > maxProb) {
+          maxProb = prob;
+          maxIndex = i;
+        }
+      });
 
-      setPrediction(predictionText) // Muestra la predicción en la UI
-      setDiagnosis(predictionText) // Rellena automáticamente el campo de diagnóstico
-      setIsSimulating(false)
-    }, 1500)
-  }
+      setProbabilities(Array.from(probabilitiesData)); // Guardar todas las probabilidades
+      const predictedClass = classLabels[maxIndex] || "Desconocido";
+      const confidence = (maxProb * 100).toFixed(2);
+      const predictionText = `IA: ${predictedClass} (Confianza: ${confidence}%)`;
 
-  // --- [CAMBIO] ---
-  // Nuevas funciones para manejar la carga de archivos.
-  // --------------------
+      setPrediction(predictionText);
+      setDiagnosis(predictionText); // Autocompletar el diagnóstico
+    } catch (error) {
+      console.error("Error during prediction:", error);
+      setPrediction("Error al analizar la imagen.");
+    } finally {
+      setIsPredicting(false);
+      tf.dispose(tensor); // Liberar memoria del tensor
+    }
+  };
+
   const handleUploadButtonClick = () => {
     // Abre el selector de archivos
     fileInputRef.current?.click()
@@ -115,23 +128,25 @@ export default function DiagnosisPage() {
 
     const reader = new FileReader()
     reader.onload = (e) => {
-      const dataUrl = e.target?.result as string
+      const dataUrl = e.target?.result as string;
       if (dataUrl) {
         const newImage: CapturedImage = {
           id: Date.now().toString(),
           dataUrl,
           timestamp: new Date(),
-        }
-        // Añade la imagen a la lista (como hacías antes)
-        setCapturedImages((prevImages) => [...prevImages, newImage])
+        };
+        setCapturedImages((prevImages) => [...prevImages, newImage]);
 
-        // Llama a la simulación de IA
-        simulateDiagnosis()
+        // Cargar la imagen en el elemento <img> para que TF.js pueda usarlo
+        const img = new Image();
+        img.src = dataUrl;
+        img.onload = () => {
+          runPrediction(img);
+        };
       }
     }
     reader.readAsDataURL(file)
 
-    // Resetea el input para poder subir el mismo archivo de nuevo
     event.target.value = ""
   }
   // -------------------------------------------------------------
@@ -165,6 +180,7 @@ export default function DiagnosisPage() {
         setDiagnosis("")
         setNotes("")
         setPrediction("") // Limpiar la predicción
+        setProbabilities([]) // Limpiar las probabilidades
         setSelectedPatient("")
       }
     } catch (error) {
@@ -199,7 +215,6 @@ export default function DiagnosisPage() {
         {/* Main Content */}
         <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           <div className="grid lg:grid-cols-2 gap-8">
-            {/* --- [CAMBIO] --- Sección de Cámara reemplazada por Carga de Archivos */}
             <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}>
               <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-100">
                 <h2 className="text-xl font-bold text-gray-900 mb-4 font-display">Cargar Imagen</h2>
@@ -228,23 +243,44 @@ export default function DiagnosisPage() {
                 <Button
                   onClick={handleUploadButtonClick}
                   className="w-full bg-[#1877f2] hover:bg-[#166fe5] gap-2"
-                  disabled={isSimulating}
+                  disabled={isPredicting || loadingModel}
                 >
                   <FileUp className="w-4 h-4" />
-                  {isSimulating ? "Analizando..." : "Seleccionar Imagen"}
+                  {loadingModel ? "Cargando modelo..." : isPredicting ? "Analizando..." : "Seleccionar Imagen"}
                 </Button>
 
                 {/* Mostrar la predicción de la IA aquí */}
-                {isSimulating && (
+                {isPredicting && (
                   <div className="mt-4 p-3 bg-gray-100 border border-gray-200 rounded-lg text-gray-900 font-medium text-center flex items-center justify-center gap-2">
                     <Loader2 className="w-4 h-4 animate-spin" />
                     {prediction}
                   </div>
                 )}
                 
-                {prediction && !isSimulating && (
+                {prediction && !isPredicting && (
                   <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg text-blue-900 font-medium text-center">
                     {prediction}
+                  </div>
+                )}
+
+                {/* Desglose de probabilidades */}
+                {probabilities.length > 0 && !isPredicting && (
+                  <div className="mt-4 space-y-2">
+                    <h4 className="text-sm font-semibold text-gray-700">Desglose de Predicción:</h4>
+                    {probabilities.map((prob, index) => (
+                      <div key={index} className="flex items-center gap-3">
+                        <span className="w-20 text-sm text-gray-600">{classLabels[index]}:</span>
+                        <div className="w-full bg-gray-200 rounded-full h-2.5">
+                          <div
+                            className="bg-blue-600 h-2.5 rounded-full"
+                            style={{ width: `${(prob * 100).toFixed(2)}%` }}
+                          ></div>
+                        </div>
+                        <span className="w-16 text-right text-sm font-mono text-gray-800">
+                          {(prob * 100).toFixed(2)}%
+                        </span>
+                      </div>
+                    ))}
                   </div>
                 )}
 
@@ -283,7 +319,6 @@ export default function DiagnosisPage() {
                 )}
               </div>
             </motion.div>
-            {/* ------------------------------------------------------------- */}
 
             {/* Diagnosis Form (sin cambios en la estructura) */}
             <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}>
@@ -345,7 +380,7 @@ export default function DiagnosisPage() {
                   </div>
                   <Button
                     onClick={saveDiagnosis}
-                    disabled={saving || !selectedPatient || !diagnosis || isSimulating}
+                    disabled={saving || !selectedPatient || !diagnosis || isPredicting || loadingModel}
                     className="w-full bg-[#10b981] hover:bg-[#059669] gap-2 py-6"
                   >
                     {saving ? (
